@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Tuple
+from typing import Tuple
 
 import numpy as np
 import cv2
@@ -37,7 +37,7 @@ def _periodic_field(h: int, w: int, seed: int) -> Tuple[np.ndarray, np.ndarray]:
     return (n1x + 0.7 * n2x).astype(np.float32), (n1y + 0.7 * n2y).astype(np.float32)
 
 
-def generate_loop_frames(
+def generate_loop_frames_iter(
     pil_image: Image.Image,
     *,
     duration_sec: float,
@@ -50,8 +50,8 @@ def generate_loop_frames(
 ) -> List[np.ndarray]:
     if fps <= 0 or fps > 60:
         raise ValueError("fps must be in 1..60")
-    if duration_sec <= 0.5 or duration_sec > 12.0:
-        raise ValueError("duration_sec must be in 0.5..12.0")
+    if duration_sec <= 0.5 or duration_sec > 30.0:
+        raise ValueError("duration_sec must be in 0.5..30.0")
     if width is not None and (width < 256 or width > 2048):
         raise ValueError("width must be in 256..2048")
     if height is not None and (height < 256 or height > 2048):
@@ -79,7 +79,7 @@ def generate_loop_frames(
     cloth = masks["cloth_edge"]
     motion_mask = np.clip(0.9 * hair + 0.8 * sleeves + 0.6 * cloth, 0.0, 1.0).astype(np.float32)
     motion_mask = cv2.GaussianBlur(motion_mask, (0, 0), sigmaX=7.0, sigmaY=7.0)
-    motion_mask = np.power(motion_mask, 1.15).astype(np.float32)
+    motion_mask = np.power(motion_mask, 1.08).astype(np.float32)
 
     motion_bin = (motion_mask > 0.04).astype(np.uint8)
     if motion_bin.any():
@@ -102,7 +102,6 @@ def generate_loop_frames(
 
     particle_field = ParticleField.from_image(rgb, count=max(0, int(particles)), seed=2026)
 
-    frames: List[np.ndarray] = []
     for t in range(total_frames):
         phase = 2.0 * math.pi * (t / total_frames)
         s1 = math.sin(phase)
@@ -143,6 +142,4 @@ def generate_loop_frames(
             overlay = particle_field.render_frame_bgr(w, h, t=t, total_frames=total_frames)
             warped = cv2.addWeighted(warped, 1.0, overlay, 1.0, 0.0)
 
-        frames.append(warped)
-
-    return frames
+        yield warped

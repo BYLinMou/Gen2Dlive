@@ -54,3 +54,48 @@ def get_default_particles() -> int:
     except ValueError:
         return 0
     return max(0, min(200, value))
+
+
+@lru_cache(maxsize=1)
+def get_default_duration_sec() -> float:
+    raw = os.getenv("GEN2DLIVE_DEFAULT_DURATION_SEC")
+    if raw is None:
+        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_DURATION_SEC")
+        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_DURATION_SEC")
+    if raw is None:
+        return 24.0
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        return 24.0
+    return float(max(0.5, min(30.0, value)))
+
+
+@lru_cache(maxsize=1)
+def get_default_fps() -> int:
+    raw = os.getenv("GEN2DLIVE_DEFAULT_FPS")
+    if raw is None:
+        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_FPS")
+        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_FPS")
+    if raw is None:
+        return 30
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        return 30
+    return max(1, min(60, value))
+
+
+@lru_cache(maxsize=1)
+def get_default_strength() -> float:
+    raw = os.getenv("GEN2DLIVE_DEFAULT_STRENGTH")
+    if raw is None:
+        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_STRENGTH")
+        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_STRENGTH")
+    if raw is None:
+        return 1.0
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        return 1.0
+    return float(max(0.0, min(3.0, value)))

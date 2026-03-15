@@ -86,6 +86,15 @@ def _face_mask(rgb: np.ndarray) -> np.ndarray:
         x1 = min(gray.shape[1], x + w + pad_x)
         y1 = min(gray.shape[0], y + h + int(h * 0.10))
         mask[y0:y1, x0:x1] = True
+    if not mask.any():
+        h, w = gray.shape[:2]
+        cx = int(w * 0.5)
+        cy = int(h * 0.34)
+        rx = int(w * 0.14)
+        ry = int(h * 0.18)
+        y, x = np.ogrid[:h, :w]
+        ellipse = (((x - cx) / max(1, rx)) ** 2 + ((y - cy) / max(1, ry)) ** 2) <= 1.0
+        mask |= ellipse
     return mask
 
 
@@ -100,7 +109,7 @@ def _boundary_weight(rgb: np.ndarray) -> np.ndarray:
         return np.ones((h, w), dtype=np.float32)
     fg = (~bg).astype(np.uint8)
     dist = cv2.distanceTransform(fg, cv2.DIST_L2, 5).astype(np.float32)
-    scale = max(8.0, 0.12 * min(h, w))
+    scale = max(12.0, 0.18 * min(h, w))
     bw = np.exp(-((dist / scale) ** 2)).astype(np.float32)
     return _soft_clip01(bw)
 

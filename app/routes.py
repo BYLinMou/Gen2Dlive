@@ -10,7 +10,12 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from app.auth import require_auth_if_configured
-from app.config import get_default_particles
+from app.config import (
+    get_default_duration_sec,
+    get_default_fps,
+    get_default_particles,
+    get_default_strength,
+)
 from app.service import generate_loop_mp4_from_bytes_to_tempfile, generate_loop_mp4_to_tempfile
 
 router = APIRouter()
@@ -20,12 +25,12 @@ DATA_URI_PREFIX = "base64,"
 
 class AnimateJsonRequest(BaseModel):
     image_base64: str
-    duration_sec: float = 4.0
-    fps: int = 30
+    duration_sec: float = get_default_duration_sec()
+    fps: int = get_default_fps()
     width: int | None = None
     height: int | None = None
     size: int | None = None
-    strength: float = 1.0
+    strength: float = get_default_strength()
     particles: int = get_default_particles()
 
 
@@ -51,12 +56,12 @@ def animate(
     _: None = Depends(require_auth_if_configured),
     image: UploadFile | None = File(default=None),
     image_base64: str | None = Form(default=None),
-    duration_sec: float = Form(4.0),
-    fps: int = Form(30),
+    duration_sec: float = Form(get_default_duration_sec()),
+    fps: int = Form(get_default_fps()),
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
     size: int | None = Form(default=None),
-    strength: float = Form(1.0),
+    strength: float = Form(get_default_strength()),
     particles: int = Form(get_default_particles()),
 ) -> FileResponse:
     if image is None and not image_base64:

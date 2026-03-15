@@ -7,7 +7,7 @@ from typing import BinaryIO
 
 from PIL import Image
 
-from app.animate import generate_loop_frames
+from app.animate import generate_loop_frames_iter
 from app.video import encode_mp4
 
 
@@ -34,7 +34,7 @@ def generate_loop_mp4_to_tempfile(
     particles: int,
 ) -> tuple[str, str]:
     pil_img = _read_image(image_file)
-    frames = generate_loop_frames(
+    frames = generate_loop_frames_iter(
         pil_img,
         duration_sec=duration_sec,
         fps=fps,
@@ -62,7 +62,7 @@ def generate_loop_mp4_from_bytes_to_tempfile(
     particles: int,
 ) -> tuple[str, str]:
     pil_img = _read_image_bytes(image_bytes)
-    frames = generate_loop_frames(
+    frames = generate_loop_frames_iter(
         pil_img,
         duration_sec=duration_sec,
         fps=fps,

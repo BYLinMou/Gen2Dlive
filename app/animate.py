@@ -81,6 +81,18 @@ def generate_loop_frames(
     motion_mask = cv2.GaussianBlur(motion_mask, (0, 0), sigmaX=7.0, sigmaY=7.0)
     motion_mask = np.power(motion_mask, 1.35).astype(np.float32)
 
+    motion_bin = (motion_mask > 0.08).astype(np.uint8)
+    if motion_bin.any():
+        x, y, bw, bh = cv2.boundingRect(motion_bin)
+        pad = int(max(8, 0.02 * min(h, w)))
+        x0 = max(0, x - pad)
+        y0 = max(0, y - pad)
+        x1 = min(w, x + bw + pad)
+        y1 = min(h, y + bh + pad)
+        roi = (x0, y0, x1, y1)
+    else:
+        roi = None
+
     base_dx, base_dy = _periodic_field(h, w, seed=12345)
     grid_x, grid_y = _make_grid(h, w)
 
@@ -103,15 +115,29 @@ def generate_loop_frames(
         dx *= motion_mask
         dy *= motion_mask
 
-        map_x = (grid_x + dx).astype(np.float32)
-        map_y = (grid_y + dy).astype(np.float32)
-        warped = cv2.remap(
-            bgr,
-            map_x,
-            map_y,
-            interpolation=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_REFLECT_101,
-        )
+        if roi is None:
+            map_x = (grid_x + dx).astype(np.float32)
+            map_y = (grid_y + dy).astype(np.float32)
+            warped = cv2.remap(
+                bgr,
+                map_x,
+                map_y,
+                interpolation=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT_101,
+            )
+        else:
+            x0, y0, x1, y1 = roi
+            map_x = (grid_x[y0:y1, x0:x1] + dx[y0:y1, x0:x1]).astype(np.float32)
+            map_y = (grid_y[y0:y1, x0:x1] + dy[y0:y1, x0:x1]).astype(np.float32)
+            warped = bgr.copy()
+            warped_roi = cv2.remap(
+                bgr[y0:y1, x0:x1],
+                map_x,
+                map_y,
+                interpolation=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT_101,
+            )
+            warped[y0:y1, x0:x1] = warped_roi
 
         if particle_field.count > 0:
             overlay = particle_field.render_frame_bgr(w, h, t=t, total_frames=total_frames)

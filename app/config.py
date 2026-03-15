@@ -40,3 +40,17 @@ def get_api_key() -> str:
         return env_val.strip()
     return ""
 
+
+@lru_cache(maxsize=1)
+def get_default_particles() -> int:
+    raw = os.getenv("GEN2DLIVE_DEFAULT_PARTICLES")
+    if raw is None:
+        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_PARTICLES")
+        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_PARTICLES")
+    if raw is None:
+        return 0
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        return 0
+    return max(0, min(200, value))

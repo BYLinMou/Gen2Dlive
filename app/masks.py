@@ -45,9 +45,56 @@ def _background_mask(rgb: np.ndarray) -> np.ndarray:
     return bg
 
 
+def _grabcut_foreground(rgb: np.ndarray) -> np.ndarray | None:
+    h, w = rgb.shape[:2]
+    if h < 64 or w < 64:
+        return None
+    rect = (
+        int(w * 0.05),
+        int(h * 0.05),
+        int(w * 0.90),
+        int(h * 0.90),
+    )
+    mask = np.zeros((h, w), np.uint8)
+    bgd = np.zeros((1, 65), np.float64)
+    fgd = np.zeros((1, 65), np.float64)
+    try:
+        cv2.grabCut(rgb, mask, rect, bgd, fgd, 3, cv2.GC_INIT_WITH_RECT)
+    except cv2.error:
+        return None
+    fg = (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD)
+    if fg.mean() < 0.05 or fg.mean() > 0.95:
+        return None
+    fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
+    fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)) > 0
+    return fg
+
+
+def _face_mask(rgb: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    detector = cv2.CascadeClassifier(cascade_path)
+    if detector.empty():
+        return np.zeros(gray.shape[:2], dtype=bool)
+    faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(48, 48))
+    mask = np.zeros(gray.shape[:2], dtype=bool)
+    for (x, y, w, h) in faces:
+        pad_x = int(w * 0.25)
+        pad_y = int(h * 0.35)
+        x0 = max(0, x - pad_x)
+        y0 = max(0, y - pad_y)
+        x1 = min(gray.shape[1], x + w + pad_x)
+        y1 = min(gray.shape[0], y + h + int(h * 0.15))
+        mask[y0:y1, x0:x1] = True
+    return mask
+
+
 def _boundary_weight(rgb: np.ndarray) -> np.ndarray:
     h, w = rgb.shape[:2]
     bg = _background_mask(rgb)
+    fg = _grabcut_foreground(rgb)
+    if fg is not None:
+        bg = ~fg
     bg_ratio = float(bg.mean())
     if bg_ratio < 0.05 or bg_ratio > 0.95:
         return np.ones((h, w), dtype=np.float32)
@@ -62,6 +109,7 @@ def build_motion_masks(rgb: np.ndarray) -> Dict[str, np.ndarray]:
     h, w = rgb.shape[:2]
     ew = _edge_weight(rgb)
     bw = _boundary_weight(rgb)
+    face = _face_mask(rgb)
 
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     xn = (xx / max(1.0, w - 1.0)) * 2.0 - 1.0
@@ -83,5 +131,11 @@ def build_motion_masks(rgb: np.ndarray) -> Dict[str, np.ndarray]:
     cloth_prior = np.exp(-((xn / 0.95) ** 2 + ((yn - 0.15) / 0.75) ** 2)).astype(np.float32)
     cloth_edge = _soft_clip01(cloth_prior * ew * bw)
     cloth_edge = cv2.GaussianBlur(cloth_edge, (0, 0), sigmaX=8.0, sigmaY=8.0)
+
+    if face.any():
+        mask_keep = (~face).astype(np.float32)
+        hair *= mask_keep
+        sleeves *= mask_keep
+        cloth_edge *= mask_keep
 
     return {"hair": hair, "sleeves": sleeves, "cloth_edge": cloth_edge}

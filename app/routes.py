@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from app.auth import require_auth_if_configured
+from app.config import get_default_particles
 from app.service import generate_loop_mp4_from_bytes_to_tempfile, generate_loop_mp4_to_tempfile
 
 router = APIRouter()
@@ -25,7 +26,7 @@ class AnimateJsonRequest(BaseModel):
     height: int | None = None
     size: int | None = None
     strength: float = 1.0
-    particles: int = 18
+    particles: int = get_default_particles()
 
 
 def _decode_base64_image(text: str) -> bytes:
@@ -56,7 +57,7 @@ def animate(
     height: int | None = Form(default=None),
     size: int | None = Form(default=None),
     strength: float = Form(1.0),
-    particles: int = Form(18),
+    particles: int = Form(get_default_particles()),
 ) -> FileResponse:
     if image is None and not image_base64:
         raise HTTPException(status_code=400, detail="Provide either image file or image_base64")

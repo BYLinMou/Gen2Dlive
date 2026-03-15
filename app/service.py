@@ -8,6 +8,7 @@ from typing import BinaryIO
 from PIL import Image
 
 from app.animate import generate_loop_frames_iter
+from app.config import get_motion_fps
 from app.video import encode_mp4
 
 
@@ -43,6 +44,7 @@ def generate_loop_mp4_to_tempfile(
         size=size,
         strength=strength,
         particles=particles,
+        motion_fps=get_motion_fps(),
     )
     tmp_dir = tempfile.mkdtemp(prefix="gen2dlive_")
     out_path = os.path.join(tmp_dir, "loop.mp4")
@@ -71,6 +73,7 @@ def generate_loop_mp4_from_bytes_to_tempfile(
         size=size,
         strength=strength,
         particles=particles,
+        motion_fps=get_motion_fps(),
     )
     tmp_dir = tempfile.mkdtemp(prefix="gen2dlive_")
     out_path = os.path.join(tmp_dir, "loop.mp4")

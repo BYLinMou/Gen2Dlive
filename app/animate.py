@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Tuple
+from typing import Iterator, Tuple
 
 import numpy as np
 import cv2
@@ -42,14 +42,17 @@ def generate_loop_frames_iter(
     *,
     duration_sec: float,
     fps: int,
+    motion_fps: int | None,
     width: int | None,
     height: int | None,
     size: int | None,
     strength: float,
     particles: int,
-) -> List[np.ndarray]:
+) -> "Iterator[np.ndarray]":
     if fps <= 0 or fps > 60:
         raise ValueError("fps must be in 1..60")
+    if motion_fps is not None and (motion_fps <= 0 or motion_fps > 60):
+        raise ValueError("motion_fps must be in 1..60")
     if duration_sec <= 0.5 or duration_sec > 30.0:
         raise ValueError("duration_sec must be in 0.5..30.0")
     if width is not None and (width < 256 or width > 2048):
@@ -96,14 +99,20 @@ def generate_loop_frames_iter(
     base_dx, base_dy = _periodic_field(h, w, seed=12345)
     grid_x, grid_y = _make_grid(h, w)
 
+    effective_motion_fps = fps if motion_fps is None else min(fps, motion_fps)
     total_frames = int(round(duration_sec * fps))
+    motion_frames = int(round(duration_sec * effective_motion_fps))
     if total_frames < 12:
         total_frames = 12
+    if motion_frames < 12:
+        motion_frames = 12
 
     particle_field = ParticleField.from_image(rgb, count=max(0, int(particles)), seed=2026)
 
-    for t in range(total_frames):
-        phase = 2.0 * math.pi * (t / total_frames)
+    repeats = max(1, int(round(fps / effective_motion_fps)))
+    produced = 0
+    for t in range(motion_frames):
+        phase = 2.0 * math.pi * (t / motion_frames)
         s1 = math.sin(phase)
         c1 = math.cos(phase)
 
@@ -142,4 +151,12 @@ def generate_loop_frames_iter(
             overlay = particle_field.render_frame_bgr(w, h, t=t, total_frames=total_frames)
             warped = cv2.addWeighted(warped, 1.0, overlay, 1.0, 0.0)
 
+        for _ in range(repeats):
+            if produced >= total_frames:
+                break
+            produced += 1
+            yield warped
+
+    while produced < total_frames:
+        produced += 1
         yield warped

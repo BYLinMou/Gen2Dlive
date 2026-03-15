@@ -79,6 +79,7 @@ def generate_loop_frames(
     cloth = masks["cloth_edge"]
     motion_mask = np.clip(0.9 * hair + 0.8 * sleeves + 0.6 * cloth, 0.0, 1.0).astype(np.float32)
     motion_mask = cv2.GaussianBlur(motion_mask, (0, 0), sigmaX=7.0, sigmaY=7.0)
+    motion_mask = np.power(motion_mask, 1.35).astype(np.float32)
 
     base_dx, base_dy = _periodic_field(h, w, seed=12345)
     grid_x, grid_y = _make_grid(h, w)

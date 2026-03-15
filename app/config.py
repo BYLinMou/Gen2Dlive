@@ -108,9 +108,9 @@ def get_motion_fps() -> int:
         local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_MOTION_FPS")
         raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_MOTION_FPS")
     if raw is None:
-        return 12
+        return 10
     try:
         value = int(str(raw).strip())
     except ValueError:
-        return 12
+        return 10
     return max(1, min(60, value))

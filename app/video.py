@@ -44,9 +44,9 @@ def _encode_with_ffmpeg(frames_bgr: Iterable[np.ndarray], fps: int, out_path: st
         "-pix_fmt",
         "yuv420p",
         "-preset",
-        "veryfast",
+        "ultrafast",
         "-crf",
-        "18",
+        "23",
         out_path,
     ]
 

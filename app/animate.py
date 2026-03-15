@@ -79,9 +79,9 @@ def generate_loop_frames(
     cloth = masks["cloth_edge"]
     motion_mask = np.clip(0.9 * hair + 0.8 * sleeves + 0.6 * cloth, 0.0, 1.0).astype(np.float32)
     motion_mask = cv2.GaussianBlur(motion_mask, (0, 0), sigmaX=7.0, sigmaY=7.0)
-    motion_mask = np.power(motion_mask, 1.35).astype(np.float32)
+    motion_mask = np.power(motion_mask, 1.15).astype(np.float32)
 
-    motion_bin = (motion_mask > 0.08).astype(np.uint8)
+    motion_bin = (motion_mask > 0.04).astype(np.uint8)
     if motion_bin.any():
         x, y, bw, bh = cv2.boundingRect(motion_bin)
         pad = int(max(8, 0.02 * min(h, w)))
@@ -131,7 +131,7 @@ def generate_loop_frames(
             map_y = (grid_y[y0:y1, x0:x1] + dy[y0:y1, x0:x1]).astype(np.float32)
             warped = bgr.copy()
             warped_roi = cv2.remap(
-                bgr[y0:y1, x0:x1],
+                bgr,
                 map_x,
                 map_y,
                 interpolation=cv2.INTER_LINEAR,

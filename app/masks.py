@@ -79,12 +79,12 @@ def _face_mask(rgb: np.ndarray) -> np.ndarray:
     faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(48, 48))
     mask = np.zeros(gray.shape[:2], dtype=bool)
     for (x, y, w, h) in faces:
-        pad_x = int(w * 0.25)
-        pad_y = int(h * 0.35)
+        pad_x = int(w * 0.18)
+        pad_y = int(h * 0.22)
         x0 = max(0, x - pad_x)
         y0 = max(0, y - pad_y)
         x1 = min(gray.shape[1], x + w + pad_x)
-        y1 = min(gray.shape[0], y + h + int(h * 0.15))
+        y1 = min(gray.shape[0], y + h + int(h * 0.10))
         mask[y0:y1, x0:x1] = True
     return mask
 

@@ -20,8 +20,10 @@ DATA_URI_PREFIX = "base64,"
 class AnimateJsonRequest(BaseModel):
     image_base64: str
     duration_sec: float = 4.0
-    fps: int = 24
-    size: int = 768
+    fps: int = 30
+    width: int | None = None
+    height: int | None = None
+    size: int | None = None
     strength: float = 1.0
     particles: int = 18
 
@@ -49,8 +51,10 @@ def animate(
     image: UploadFile | None = File(default=None),
     image_base64: str | None = Form(default=None),
     duration_sec: float = Form(4.0),
-    fps: int = Form(24),
-    size: int = Form(768),
+    fps: int = Form(30),
+    width: int | None = Form(default=None),
+    height: int | None = Form(default=None),
+    size: int | None = Form(default=None),
     strength: float = Form(1.0),
     particles: int = Form(18),
 ) -> FileResponse:
@@ -64,6 +68,8 @@ def animate(
             image_file=image.file,
             duration_sec=duration_sec,
             fps=fps,
+            width=width,
+            height=height,
             size=size,
             strength=strength,
             particles=particles,
@@ -74,6 +80,8 @@ def animate(
             image_bytes=image_bytes,
             duration_sec=duration_sec,
             fps=fps,
+            width=width,
+            height=height,
             size=size,
             strength=strength,
             particles=particles,
@@ -97,6 +105,8 @@ def animate_json(
         image_bytes=image_bytes,
         duration_sec=payload.duration_sec,
         fps=payload.fps,
+        width=payload.width,
+        height=payload.height,
         size=payload.size,
         strength=payload.strength,
         particles=payload.particles,

@@ -9,7 +9,7 @@ from PIL import Image
 
 from app.masks import build_motion_masks
 from app.particles import ParticleField
-from app.resize import resize_to_square_cover
+from app.resize import resize_to_exact, resize_to_square_cover
 
 
 def _make_grid(h: int, w: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -42,7 +42,9 @@ def generate_loop_frames(
     *,
     duration_sec: float,
     fps: int,
-    size: int,
+    width: int | None,
+    height: int | None,
+    size: int | None,
     strength: float,
     particles: int,
 ) -> List[np.ndarray]:
@@ -50,13 +52,24 @@ def generate_loop_frames(
         raise ValueError("fps must be in 1..60")
     if duration_sec <= 0.5 or duration_sec > 12.0:
         raise ValueError("duration_sec must be in 0.5..12.0")
-    if size < 256 or size > 1536:
-        raise ValueError("size must be in 256..1536")
+    if width is not None and (width < 256 or width > 2048):
+        raise ValueError("width must be in 256..2048")
+    if height is not None and (height < 256 or height > 2048):
+        raise ValueError("height must be in 256..2048")
+    if size is not None and (size < 256 or size > 2048):
+        raise ValueError("size must be in 256..2048")
+    if (width is None) != (height is None):
+        raise ValueError("width and height must be provided together")
     if strength < 0.0 or strength > 3.0:
         raise ValueError("strength must be in 0..3")
 
-    pil_sq = resize_to_square_cover(pil_image, size=size)
-    rgb = np.asarray(pil_sq).astype(np.uint8)
+    target_img = pil_image
+    if width is not None and height is not None:
+        target_img = resize_to_exact(pil_image, width=width, height=height)
+    elif size is not None:
+        target_img = resize_to_square_cover(pil_image, size=size)
+
+    rgb = np.asarray(target_img).astype(np.uint8)
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     h, w = bgr.shape[:2]
 
@@ -106,4 +119,3 @@ def generate_loop_frames(
         frames.append(warped)
 
     return frames
-

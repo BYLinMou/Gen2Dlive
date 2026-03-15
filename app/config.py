@@ -63,11 +63,11 @@ def get_default_duration_sec() -> float:
         local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_DURATION_SEC")
         raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_DURATION_SEC")
     if raw is None:
-        return 24.0
+        return 20.0
     try:
         value = float(str(raw).strip())
     except ValueError:
-        return 24.0
+        return 20.0
     return float(max(0.5, min(30.0, value)))
 
 
@@ -108,9 +108,9 @@ def get_motion_fps() -> int:
         local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_MOTION_FPS")
         raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_MOTION_FPS")
     if raw is None:
-        return 15
+        return 12
     try:
         value = int(str(raw).strip())
     except ValueError:
-        return 15
+        return 12
     return max(1, min(60, value))

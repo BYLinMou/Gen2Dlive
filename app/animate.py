@@ -109,8 +109,6 @@ def generate_loop_frames_iter(
 
     particle_field = ParticleField.from_image(rgb, count=max(0, int(particles)), seed=2026)
 
-    repeats = max(1, int(round(fps / effective_motion_fps)))
-    produced = 0
     for t in range(motion_frames):
         phase = 2.0 * math.pi * (t / motion_frames)
         s1 = math.sin(phase)
@@ -151,12 +149,4 @@ def generate_loop_frames_iter(
             overlay = particle_field.render_frame_bgr(w, h, t=t, total_frames=total_frames)
             warped = cv2.addWeighted(warped, 1.0, overlay, 1.0, 0.0)
 
-        for _ in range(repeats):
-            if produced >= total_frames:
-                break
-            produced += 1
-            yield warped
-
-    while produced < total_frames:
-        produced += 1
         yield warped

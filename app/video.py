@@ -18,7 +18,7 @@ def _prime_iterator(frames_bgr: Iterable[np.ndarray]) -> Tuple[np.ndarray, Itera
     return first, iterator
 
 
-def _encode_with_ffmpeg(frames_bgr: Iterable[np.ndarray], fps: int, out_path: str) -> bool:
+def _encode_with_ffmpeg(frames_bgr: Iterable[np.ndarray], fps: int, input_fps: int, out_path: str) -> bool:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return False
@@ -35,9 +35,11 @@ def _encode_with_ffmpeg(frames_bgr: Iterable[np.ndarray], fps: int, out_path: st
         "-video_size",
         f"{w}x{h}",
         "-framerate",
-        str(fps),
+        str(input_fps),
         "-i",
         "-",
+        "-r",
+        str(fps),
         "-an",
         "-c:v",
         "libx264",
@@ -76,8 +78,17 @@ def _encode_with_opencv(frames_bgr: Iterable[np.ndarray], fps: int, out_path: st
         writer.release()
 
 
-def encode_mp4(*, frames_bgr: Iterable[np.ndarray], fps: int, out_path: str) -> None:
-    ok = _encode_with_ffmpeg(frames_bgr, fps, out_path)
+def _duplicate_frames(frames_bgr: Iterable[np.ndarray], repeat: int) -> Iterator[np.ndarray]:
+    for frame in frames_bgr:
+        for _ in range(repeat):
+            yield frame
+
+
+def encode_mp4(*, frames_bgr: Iterable[np.ndarray], fps: int, input_fps: int, out_path: str) -> None:
+    ok = _encode_with_ffmpeg(frames_bgr, fps, input_fps, out_path)
     if ok:
         return
+    if input_fps != fps:
+        repeat = max(1, int(round(fps / input_fps)))
+        frames_bgr = _duplicate_frames(frames_bgr, repeat)
     _encode_with_opencv(frames_bgr, fps, out_path)

@@ -35,6 +35,7 @@ def generate_loop_mp4_to_tempfile(
     particles: int,
 ) -> tuple[str, str]:
     pil_img = _read_image(image_file)
+    motion_fps = get_motion_fps()
     frames = generate_loop_frames_iter(
         pil_img,
         duration_sec=duration_sec,
@@ -44,11 +45,11 @@ def generate_loop_mp4_to_tempfile(
         size=size,
         strength=strength,
         particles=particles,
-        motion_fps=get_motion_fps(),
+        motion_fps=motion_fps,
     )
     tmp_dir = tempfile.mkdtemp(prefix="gen2dlive_")
     out_path = os.path.join(tmp_dir, "loop.mp4")
-    encode_mp4(frames_bgr=frames, fps=fps, out_path=out_path)
+    encode_mp4(frames_bgr=frames, fps=fps, input_fps=motion_fps, out_path=out_path)
     return out_path, tmp_dir
 
 
@@ -64,6 +65,7 @@ def generate_loop_mp4_from_bytes_to_tempfile(
     particles: int,
 ) -> tuple[str, str]:
     pil_img = _read_image_bytes(image_bytes)
+    motion_fps = get_motion_fps()
     frames = generate_loop_frames_iter(
         pil_img,
         duration_sec=duration_sec,
@@ -73,9 +75,9 @@ def generate_loop_mp4_from_bytes_to_tempfile(
         size=size,
         strength=strength,
         particles=particles,
-        motion_fps=get_motion_fps(),
+        motion_fps=motion_fps,
     )
     tmp_dir = tempfile.mkdtemp(prefix="gen2dlive_")
     out_path = os.path.join(tmp_dir, "loop.mp4")
-    encode_mp4(frames_bgr=frames, fps=fps, out_path=out_path)
+    encode_mp4(frames_bgr=frames, fps=fps, input_fps=motion_fps, out_path=out_path)
     return out_path, tmp_dir

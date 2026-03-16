@@ -114,7 +114,7 @@ def generate_loop_frames_iter(
         s1 = math.sin(phase)
         c1 = math.cos(phase)
 
-        amp_px = 5.8 * strength
+        amp_px = 8.2 * strength
         dx = (0.95 * s1 * base_dx + 0.55 * c1 * base_dy) * amp_px
         dy = (0.70 * c1 * base_dy + 0.35 * s1 * base_dx) * (amp_px * 0.90)
 

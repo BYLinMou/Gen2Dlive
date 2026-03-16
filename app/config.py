@@ -25,28 +25,29 @@ def _read_env_value(path: Path, key: str) -> str | None:
     return None
 
 
+def _read_setting(*keys: str) -> str | None:
+    for key in keys:
+        value = os.getenv(key)
+        if value is not None:
+            return value
+    for env_name in (".env.local", ".env"):
+        env_path = PROJECT_ROOT / env_name
+        for key in keys:
+            value = _read_env_value(env_path, key)
+            if value is not None:
+                return value
+    return None
+
+
 @lru_cache(maxsize=1)
 def get_api_key() -> str:
-    key = os.getenv("GEN2DLIVE_API_KEY")
-    if key is not None:
-        return key.strip()
-
-    local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_API_KEY")
-    if local_val is not None:
-        return local_val.strip()
-
-    env_val = _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_API_KEY")
-    if env_val is not None:
-        return env_val.strip()
-    return ""
+    value = _read_setting("GEN2DLIVE_API_KEY")
+    return "" if value is None else value.strip()
 
 
 @lru_cache(maxsize=1)
 def get_default_particles() -> int:
-    raw = os.getenv("GEN2DLIVE_DEFAULT_PARTICLES")
-    if raw is None:
-        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_PARTICLES")
-        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_PARTICLES")
+    raw = _read_setting("GEN2DLIVE_DEFAULT_PARTICLES")
     if raw is None:
         return 0
     try:
@@ -58,25 +59,19 @@ def get_default_particles() -> int:
 
 @lru_cache(maxsize=1)
 def get_default_duration_sec() -> float:
-    raw = os.getenv("GEN2DLIVE_DEFAULT_DURATION_SEC")
+    raw = _read_setting("GEN2DLIVE_DEFAULT_CYCLE_SEC", "GEN2DLIVE_DEFAULT_DURATION_SEC")
     if raw is None:
-        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_DURATION_SEC")
-        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_DURATION_SEC")
-    if raw is None:
-        return 20.0
+        return 3.0
     try:
         value = float(str(raw).strip())
     except ValueError:
-        return 20.0
-    return float(max(0.5, min(30.0, value)))
+        return 3.0
+    return float(max(0.5, min(6.0, value)))
 
 
 @lru_cache(maxsize=1)
 def get_default_fps() -> int:
-    raw = os.getenv("GEN2DLIVE_DEFAULT_FPS")
-    if raw is None:
-        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_FPS")
-        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_FPS")
+    raw = _read_setting("GEN2DLIVE_DEFAULT_FPS")
     if raw is None:
         return 30
     try:
@@ -88,10 +83,7 @@ def get_default_fps() -> int:
 
 @lru_cache(maxsize=1)
 def get_default_strength() -> float:
-    raw = os.getenv("GEN2DLIVE_DEFAULT_STRENGTH")
-    if raw is None:
-        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_STRENGTH")
-        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_STRENGTH")
+    raw = _read_setting("GEN2DLIVE_DEFAULT_STRENGTH")
     if raw is None:
         return 2.0
     try:
@@ -103,10 +95,7 @@ def get_default_strength() -> float:
 
 @lru_cache(maxsize=1)
 def get_motion_fps() -> int:
-    raw = os.getenv("GEN2DLIVE_MOTION_FPS")
-    if raw is None:
-        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_MOTION_FPS")
-        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_MOTION_FPS")
+    raw = _read_setting("GEN2DLIVE_MOTION_FPS")
     if raw is None:
         return 10
     try:
@@ -118,13 +107,21 @@ def get_motion_fps() -> int:
 
 @lru_cache(maxsize=1)
 def get_segmentation_backend() -> str:
-    raw = os.getenv("GEN2DLIVE_SEGMENTATION_BACKEND")
-    if raw is None:
-        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_SEGMENTATION_BACKEND")
-        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_SEGMENTATION_BACKEND")
+    raw = _read_setting("GEN2DLIVE_SEGMENTATION_BACKEND")
     if raw is None:
         return "rembg"
     value = str(raw).strip().lower()
     if value in {"rembg", "heuristic"}:
         return value
     return "rembg"
+
+
+@lru_cache(maxsize=1)
+def get_segmentation_model() -> str:
+    raw = _read_setting("GEN2DLIVE_SEGMENTATION_MODEL")
+    if raw is None:
+        return "isnet-anime"
+    value = str(raw).strip().lower()
+    if value in {"isnet-anime", "u2net_human_seg", "u2net"}:
+        return value
+    return "isnet-anime"

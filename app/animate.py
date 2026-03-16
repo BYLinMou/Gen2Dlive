@@ -1,36 +1,29 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Iterator, Tuple
 
-import numpy as np
 import cv2
+import numpy as np
 from PIL import Image
 
-from app.masks import build_motion_masks
+from app.masks import MotionComponent, build_motion_parse
 from app.particles import ParticleField
 from app.resize import resize_to_exact, resize_to_square_cover
 
 
-def _make_grid(h: int, w: int) -> Tuple[np.ndarray, np.ndarray]:
-    xs = np.tile(np.arange(w, dtype=np.float32)[None, :], (h, 1))
-    ys = np.tile(np.arange(h, dtype=np.float32)[:, None], (1, w))
-    return xs, ys
-
-
-def _lowfreq_noise(h: int, w: int, rng: np.random.Generator, scale: int) -> np.ndarray:
-    sh = max(2, h // scale)
-    sw = max(2, w // scale)
-    small = rng.random((sh, sw), dtype=np.float32)
-    noise = cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
-    noise = cv2.GaussianBlur(noise, (0, 0), sigmaX=6.0, sigmaY=6.0)
-    noise = (noise - noise.mean()) / (noise.std() + 1e-6)
-    return noise
-
-
-def _soft_ramp(x: np.ndarray, start: float, end: float) -> np.ndarray:
-    denom = max(1e-6, end - start)
-    return np.clip((x - start) / denom, 0.0, 1.0).astype(np.float32)
+@dataclass(frozen=True)
+class _MotionLayer:
+    name: str
+    premult_bgr: np.ndarray
+    alpha: np.ndarray
+    center: Tuple[float, float]
+    order: int
+    angle_scale: float
+    tx_scale: float
+    ty_scale: float
+    phase_offset: float
 
 
 def _component_anchor(mask: np.ndarray, *, mode: str) -> Tuple[float, float] | None:
@@ -40,7 +33,7 @@ def _component_anchor(mask: np.ndarray, *, mode: str) -> Tuple[float, float] | N
     ys = pts[:, 0].astype(np.float32)
     xs = pts[:, 1].astype(np.float32)
     if mode == "top":
-        upper_cut = float(np.percentile(ys, 32))
+        upper_cut = float(np.percentile(ys, 30))
         upper = ys <= upper_cut
         if upper.any():
             xs = xs[upper]
@@ -48,16 +41,20 @@ def _component_anchor(mask: np.ndarray, *, mode: str) -> Tuple[float, float] | N
         x_mid = float(np.median(xs))
         y_anchor = float(np.percentile(ys, 8))
     elif mode == "upper":
-        x_mid = float(xs.mean())
-        y_anchor = float(np.percentile(ys, 22))
+        x_mid = float(np.median(xs))
+        y_anchor = float(np.percentile(ys, 18))
     else:
-        x_mid = float(xs.mean())
-        y_anchor = float(np.percentile(ys, 35))
+        x_mid = float(np.median(xs))
+        y_anchor = float(np.percentile(ys, 32))
     return x_mid, y_anchor
 
 
-def _transform_bgra(
-    bgr: np.ndarray,
+def _extract_premultiplied_layer(bgr: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    return bgr.astype(np.float32) * np.clip(alpha[..., None], 0.0, 1.0)
+
+
+def _transform_layer(
+    premult_bgr: np.ndarray,
     alpha: np.ndarray,
     *,
     angle_deg: float,
@@ -68,12 +65,13 @@ def _transform_bgra(
     matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
     matrix[0, 2] += tx
     matrix[1, 2] += ty
-    warped_bgr = cv2.warpAffine(
-        bgr,
+    warped_layer = cv2.warpAffine(
+        premult_bgr,
         matrix,
-        (bgr.shape[1], bgr.shape[0]),
+        (premult_bgr.shape[1], premult_bgr.shape[0]),
         flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0),
     )
     warped_alpha = cv2.warpAffine(
         alpha,
@@ -83,12 +81,69 @@ def _transform_bgra(
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0,
     )
-    return warped_bgr, warped_alpha
+    return warped_layer, warped_alpha
 
 
-def _composite(base: np.ndarray, layer: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+def _composite_premult(base: np.ndarray, premult_layer: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     a = np.clip(alpha[..., None], 0.0, 1.0).astype(np.float32)
-    return (base.astype(np.float32) * (1.0 - a) + layer.astype(np.float32) * a).astype(np.uint8)
+    out = base.astype(np.float32) * (1.0 - a) + premult_layer.astype(np.float32)
+    return np.clip(out, 0.0, 255.0).astype(np.uint8)
+
+
+def _build_static_base(bgr: np.ndarray, hole_alpha: np.ndarray) -> np.ndarray:
+    hole_mask = (hole_alpha > 0.16).astype(np.uint8)
+    hole_ratio = float(hole_mask.mean())
+    if hole_ratio <= 0.001 or hole_ratio >= 0.22:
+        return bgr.copy()
+    hole_mask = cv2.dilate(hole_mask, np.ones((3, 3), np.uint8), iterations=1)
+    return cv2.inpaint(bgr, hole_mask * 255, 3, cv2.INPAINT_TELEA)
+
+
+def _prepare_layer_alpha(alpha: np.ndarray, *, gamma: float, blur_sigma: float) -> np.ndarray:
+    out = np.clip(alpha, 0.0, 1.0).astype(np.float32)
+    if blur_sigma > 0.0:
+        out = cv2.GaussianBlur(out, (0, 0), sigmaX=blur_sigma, sigmaY=blur_sigma)
+    out = np.power(np.clip(out, 0.0, 1.0), gamma).astype(np.float32)
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def _layer_from_component(
+    bgr: np.ndarray,
+    component: MotionComponent,
+) -> list[_MotionLayer]:
+    layers: list[_MotionLayer] = []
+
+    hair_alpha = _prepare_layer_alpha(component.hair, gamma=0.95, blur_sigma=1.1)
+    upper_alpha = _prepare_layer_alpha(component.garment_upper, gamma=1.00, blur_sigma=1.2)
+    lower_alpha = _prepare_layer_alpha(component.garment_lower, gamma=1.05, blur_sigma=1.4)
+
+    specs = [
+        ("lower_cloth", lower_alpha, "middle", 10, 0.16, 1.16, 0.384, -0.25),
+        ("upper_cloth", upper_alpha, "upper", 20, 0.272, 0.88, 0.144, 0.45),
+        ("hair", hair_alpha, "top", 30, 0.576, 1.4, 0.192, 0.00),
+    ]
+
+    for name, alpha, anchor_mode, order, angle_scale, tx_scale, ty_scale, phase_offset in specs:
+        if float(alpha.max()) < 0.06:
+            continue
+        anchor = _component_anchor(alpha, mode=anchor_mode)
+        if anchor is None:
+            continue
+        layers.append(
+            _MotionLayer(
+                name=name,
+                premult_bgr=_extract_premultiplied_layer(bgr, alpha),
+                alpha=alpha,
+                center=anchor,
+                order=order,
+                angle_scale=angle_scale,
+                tx_scale=tx_scale,
+                ty_scale=ty_scale,
+                phase_offset=phase_offset,
+            )
+        )
+
+    return layers
 
 
 def generate_loop_frames_iter(
@@ -102,13 +157,13 @@ def generate_loop_frames_iter(
     size: int | None,
     strength: float,
     particles: int,
-) -> "Iterator[np.ndarray]":
+) -> Iterator[np.ndarray]:
     if fps <= 0 or fps > 60:
         raise ValueError("fps must be in 1..60")
     if motion_fps is not None and (motion_fps <= 0 or motion_fps > 60):
         raise ValueError("motion_fps must be in 1..60")
-    if duration_sec <= 0.5 or duration_sec > 30.0:
-        raise ValueError("duration_sec must be in 0.5..30.0")
+    if duration_sec <= 0.5 or duration_sec > 6.0:
+        raise ValueError("duration_sec must be in 0.5..6.0")
     if width is not None and (width < 256 or width > 2048):
         raise ValueError("width must be in 256..2048")
     if height is not None and (height < 256 or height > 2048):
@@ -130,81 +185,41 @@ def generate_loop_frames_iter(
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     h, w = bgr.shape[:2]
 
-    masks = build_motion_masks(rgb)
-    hair = masks["hair"]
-    sleeve_left = masks["sleeve_left"]
-    sleeve_right = masks["sleeve_right"]
-    cloth = masks["cloth_edge"]
-    motion_mask = np.clip(0.95 * hair + 1.05 * sleeve_left + 1.05 * sleeve_right + 1.20 * cloth, 0.0, 1.0).astype(np.float32)
-    motion_mask = cv2.GaussianBlur(motion_mask, (0, 0), sigmaX=7.0, sigmaY=7.0)
-    motion_mask = np.power(motion_mask, 0.90).astype(np.float32)
+    parsed = build_motion_parse(rgb)
+    static_base = _build_static_base(bgr, parsed.base_hole)
 
-    grid_x, grid_y = _make_grid(h, w)
-    xn = (grid_x / max(1.0, float(w - 1))) * 2.0 - 1.0
-    yn = grid_y / max(1.0, float(h - 1))
-    cx = np.abs(xn)
-
-    hair_mask = (hair > 0.03).astype(np.uint8)
-    hair_dist = cv2.distanceTransform(hair_mask, cv2.DIST_L2, 5).astype(np.float32)
-    hair_edge = np.exp(-((hair_dist / 18.0) ** 2)).astype(np.float32)
-    hair_top_band = np.exp(-(((yn - 0.24) / 0.22) ** 2)).astype(np.float32)
-    hair_side_band = (_soft_ramp(cx, 0.16, 0.48) * _soft_ramp(yn, 0.18, 0.86)).astype(np.float32)
-    hair_outline_focus = np.maximum(hair_top_band, 0.92 * hair_side_band).astype(np.float32)
-    hair_alpha = cv2.GaussianBlur(
-        (
-            hair
-            * hair_edge
-            * hair_outline_focus
-        ).astype(np.float32),
-        (0, 0),
-        sigmaX=1.6,
-        sigmaY=1.6,
-    )
-    hair_alpha = np.clip(hair_alpha * 4.2, 0.0, 1.0).astype(np.float32)
-
-    # Pause sleeve / cloth animation for now. Detection is too unstable on the current art style.
-    sleeve_left_alpha = np.zeros_like(hair_alpha)
-    sleeve_right_alpha = np.zeros_like(hair_alpha)
-    cloth_alpha = np.zeros_like(hair_alpha)
-
-    hair_anchor = _component_anchor(hair_alpha, mode="top")
-    sleeve_left_anchor = _component_anchor(sleeve_left_alpha, mode="upper")
-    sleeve_right_anchor = _component_anchor(sleeve_right_alpha, mode="upper")
-    cloth_anchor = _component_anchor(cloth_alpha, mode="middle")
+    motion_layers: list[_MotionLayer] = []
+    for component in parsed.components:
+        motion_layers.extend(_layer_from_component(bgr, component))
+    motion_layers.sort(key=lambda layer: layer.order)
 
     effective_motion_fps = fps if motion_fps is None else min(fps, motion_fps)
-    total_frames = int(round(duration_sec * fps))
-    motion_frames = int(round(duration_sec * effective_motion_fps))
-    if total_frames < 12:
-        total_frames = 12
-    if motion_frames < 12:
-        motion_frames = 12
+    motion_frames = max(4, int(round(duration_sec * effective_motion_fps)))
 
     particle_field = ParticleField.from_image(rgb, count=max(0, int(particles)), seed=2026)
-    cycle_rate = 1.65
 
     for t in range(motion_frames):
-        phase = 2.0 * math.pi * cycle_rate * (t / motion_frames)
-        s1 = math.sin(phase)
-        c1 = math.cos(phase)
-        warped = bgr.copy()
+        phase = 2.0 * math.pi * (t / motion_frames)
+        frame = static_base.copy()
 
-        if hair_anchor is not None:
-            hair_layer, hair_layer_alpha = _transform_bgra(
-                bgr,
-                hair_alpha,
-                angle_deg=0.64 * strength * s1,
-                tx=1.67 * strength * s1,
-                ty=0.27 * strength * c1,
-                center=hair_anchor,
+        for layer in motion_layers:
+            layer_phase = phase + layer.phase_offset
+            sway = math.sin(layer_phase)
+            lift = math.cos(layer_phase)
+            flutter = math.sin((2.0 * phase) + layer.phase_offset) * 0.18
+
+            warped_layer, warped_alpha = _transform_layer(
+                layer.premult_bgr,
+                layer.alpha,
+                angle_deg=layer.angle_scale * strength * (sway + flutter),
+                tx=layer.tx_scale * strength * (sway + 0.25 * flutter),
+                ty=layer.ty_scale * strength * lift,
+                center=layer.center,
             )
-            warped = _composite(warped, hair_layer, hair_layer_alpha)
-
-        # Sleeve / cloth branches intentionally disabled for this iteration.
-        # The masks are currently too noisy and move large parts of the character/background.
+            frame = _composite_premult(frame, warped_layer, warped_alpha)
 
         if particle_field.count > 0:
-            overlay = particle_field.render_frame_bgr(w, h, t=t, total_frames=total_frames)
-            warped = cv2.addWeighted(warped, 1.0, overlay, 1.0, 0.0)
+            overlay = particle_field.render_frame_bgr(w, h, t=t, total_frames=motion_frames)
+            frame = cv2.addWeighted(frame, 1.0, overlay, 1.0, 0.0)
 
-        yield warped
+        yield frame

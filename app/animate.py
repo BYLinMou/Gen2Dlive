@@ -28,13 +28,60 @@ def _lowfreq_noise(h: int, w: int, rng: np.random.Generator, scale: int) -> np.n
     return noise
 
 
-def _periodic_field(h: int, w: int, seed: int) -> Tuple[np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(seed)
-    n1x = _lowfreq_noise(h, w, rng, scale=28)
-    n2x = _lowfreq_noise(h, w, rng, scale=34)
-    n1y = _lowfreq_noise(h, w, rng, scale=30)
-    n2y = _lowfreq_noise(h, w, rng, scale=40)
-    return (n1x + 0.7 * n2x).astype(np.float32), (n1y + 0.7 * n2y).astype(np.float32)
+def _soft_ramp(x: np.ndarray, start: float, end: float) -> np.ndarray:
+    denom = max(1e-6, end - start)
+    return np.clip((x - start) / denom, 0.0, 1.0).astype(np.float32)
+
+
+def _component_anchor(mask: np.ndarray, *, mode: str) -> Tuple[float, float] | None:
+    pts = np.column_stack(np.nonzero(mask > 0.05))
+    if pts.size == 0:
+        return None
+    ys = pts[:, 0].astype(np.float32)
+    xs = pts[:, 1].astype(np.float32)
+    x_mid = float(xs.mean())
+    if mode == "top":
+        y_anchor = float(np.percentile(ys, 12))
+    elif mode == "upper":
+        y_anchor = float(np.percentile(ys, 22))
+    else:
+        y_anchor = float(np.percentile(ys, 35))
+    return x_mid, y_anchor
+
+
+def _transform_bgra(
+    bgr: np.ndarray,
+    alpha: np.ndarray,
+    *,
+    angle_deg: float,
+    tx: float,
+    ty: float,
+    center: Tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    matrix[0, 2] += tx
+    matrix[1, 2] += ty
+    warped_bgr = cv2.warpAffine(
+        bgr,
+        matrix,
+        (bgr.shape[1], bgr.shape[0]),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT_101,
+    )
+    warped_alpha = cv2.warpAffine(
+        alpha,
+        matrix,
+        (alpha.shape[1], alpha.shape[0]),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    return warped_bgr, warped_alpha
+
+
+def _composite(base: np.ndarray, layer: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    a = np.clip(alpha[..., None], 0.0, 1.0).astype(np.float32)
+    return (base.astype(np.float32) * (1.0 - a) + layer.astype(np.float32) * a).astype(np.uint8)
 
 
 def generate_loop_frames_iter(
@@ -78,26 +125,27 @@ def generate_loop_frames_iter(
 
     masks = build_motion_masks(rgb)
     hair = masks["hair"]
-    sleeves = masks["sleeves"]
+    sleeve_left = masks["sleeve_left"]
+    sleeve_right = masks["sleeve_right"]
     cloth = masks["cloth_edge"]
-    motion_mask = np.clip(0.9 * hair + 0.8 * sleeves + 0.6 * cloth, 0.0, 1.0).astype(np.float32)
+    motion_mask = np.clip(0.95 * hair + 1.05 * sleeve_left + 1.05 * sleeve_right + 1.20 * cloth, 0.0, 1.0).astype(np.float32)
     motion_mask = cv2.GaussianBlur(motion_mask, (0, 0), sigmaX=7.0, sigmaY=7.0)
-    motion_mask = np.power(motion_mask, 0.95).astype(np.float32)
+    motion_mask = np.power(motion_mask, 0.90).astype(np.float32)
 
-    motion_bin = (motion_mask > 0.04).astype(np.uint8)
-    if motion_bin.any():
-        x, y, bw, bh = cv2.boundingRect(motion_bin)
-        pad = int(max(8, 0.02 * min(h, w)))
-        x0 = max(0, x - pad)
-        y0 = max(0, y - pad)
-        x1 = min(w, x + bw + pad)
-        y1 = min(h, y + bh + pad)
-        roi = (x0, y0, x1, y1)
-    else:
-        roi = None
-
-    base_dx, base_dy = _periodic_field(h, w, seed=12345)
     grid_x, grid_y = _make_grid(h, w)
+    xn = (grid_x / max(1.0, float(w - 1))) * 2.0 - 1.0
+    yn = grid_y / max(1.0, float(h - 1))
+    cx = np.abs(xn)
+
+    hair_alpha = cv2.GaussianBlur((hair * _soft_ramp(yn, 0.18, 0.88) * (0.25 + 0.75 * _soft_ramp(cx, 0.10, 0.48))).astype(np.float32), (0, 0), sigmaX=4.0, sigmaY=4.0)
+    sleeve_left_alpha = cv2.GaussianBlur((sleeve_left * _soft_ramp(yn, 0.24, 0.96)).astype(np.float32), (0, 0), sigmaX=5.0, sigmaY=5.0)
+    sleeve_right_alpha = cv2.GaussianBlur((sleeve_right * _soft_ramp(yn, 0.24, 0.96)).astype(np.float32), (0, 0), sigmaX=5.0, sigmaY=5.0)
+    cloth_alpha = cv2.GaussianBlur((cloth * _soft_ramp(yn, 0.40, 0.98)).astype(np.float32), (0, 0), sigmaX=6.0, sigmaY=6.0)
+
+    hair_anchor = _component_anchor(hair_alpha, mode="top")
+    sleeve_left_anchor = _component_anchor(sleeve_left_alpha, mode="upper")
+    sleeve_right_anchor = _component_anchor(sleeve_right_alpha, mode="upper")
+    cloth_anchor = _component_anchor(cloth_alpha, mode="middle")
 
     effective_motion_fps = fps if motion_fps is None else min(fps, motion_fps)
     total_frames = int(round(duration_sec * fps))
@@ -113,37 +161,51 @@ def generate_loop_frames_iter(
         phase = 2.0 * math.pi * (t / motion_frames)
         s1 = math.sin(phase)
         c1 = math.cos(phase)
+        warped = bgr.copy()
 
-        amp_px = 8.2 * strength
-        dx = (0.95 * s1 * base_dx + 0.55 * c1 * base_dy) * amp_px
-        dy = (0.70 * c1 * base_dy + 0.35 * s1 * base_dx) * (amp_px * 0.90)
-
-        dx *= motion_mask
-        dy *= motion_mask
-
-        if roi is None:
-            map_x = (grid_x + dx).astype(np.float32)
-            map_y = (grid_y + dy).astype(np.float32)
-            warped = cv2.remap(
+        if hair_anchor is not None:
+            hair_layer, hair_layer_alpha = _transform_bgra(
                 bgr,
-                map_x,
-                map_y,
-                interpolation=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_REFLECT_101,
+                hair_alpha,
+                angle_deg=3.6 * strength * s1,
+                tx=10.0 * strength * s1,
+                ty=2.0 * strength * c1,
+                center=hair_anchor,
             )
-        else:
-            x0, y0, x1, y1 = roi
-            map_x = (grid_x[y0:y1, x0:x1] + dx[y0:y1, x0:x1]).astype(np.float32)
-            map_y = (grid_y[y0:y1, x0:x1] + dy[y0:y1, x0:x1]).astype(np.float32)
-            warped = bgr.copy()
-            warped_roi = cv2.remap(
+            warped = _composite(warped, hair_layer, hair_layer_alpha)
+
+        if sleeve_left_anchor is not None:
+            left_layer, left_alpha = _transform_bgra(
                 bgr,
-                map_x,
-                map_y,
-                interpolation=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_REFLECT_101,
+                sleeve_left_alpha,
+                angle_deg=-5.0 * strength * s1,
+                tx=-8.0 * strength * s1,
+                ty=6.0 * strength * c1,
+                center=sleeve_left_anchor,
             )
-            warped[y0:y1, x0:x1] = warped_roi
+            warped = _composite(warped, left_layer, left_alpha)
+
+        if sleeve_right_anchor is not None:
+            right_layer, right_alpha = _transform_bgra(
+                bgr,
+                sleeve_right_alpha,
+                angle_deg=5.0 * strength * s1,
+                tx=8.0 * strength * s1,
+                ty=6.0 * strength * c1,
+                center=sleeve_right_anchor,
+            )
+            warped = _composite(warped, right_layer, right_alpha)
+
+        if cloth_anchor is not None:
+            cloth_layer, cloth_layer_alpha = _transform_bgra(
+                bgr,
+                cloth_alpha,
+                angle_deg=1.5 * strength * c1,
+                tx=4.0 * strength * s1,
+                ty=10.0 * strength * s1,
+                center=cloth_anchor,
+            )
+            warped = _composite(warped, cloth_layer, cloth_layer_alpha)
 
         if particle_field.count > 0:
             overlay = particle_field.render_frame_bgr(w, h, t=t, total_frames=total_frames)

@@ -70,6 +70,15 @@ def _grabcut_foreground(rgb: np.ndarray) -> np.ndarray | None:
     return fg
 
 
+def _foreground_mask(rgb: np.ndarray) -> np.ndarray:
+    fg = _grabcut_foreground(rgb)
+    if fg is None:
+        fg = ~_background_mask(rgb)
+    fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
+    fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8)) > 0
+    return fg
+
+
 def _face_mask(rgb: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -98,53 +107,69 @@ def _face_mask(rgb: np.ndarray) -> np.ndarray:
     return mask
 
 
-def _boundary_weight(rgb: np.ndarray) -> np.ndarray:
-    h, w = rgb.shape[:2]
-    bg = _background_mask(rgb)
-    fg = _grabcut_foreground(rgb)
-    if fg is not None:
-        bg = ~fg
-    bg_ratio = float(bg.mean())
-    if bg_ratio < 0.05 or bg_ratio > 0.95:
-        return np.ones((h, w), dtype=np.float32)
-    fg = (~bg).astype(np.uint8)
-    dist = cv2.distanceTransform(fg, cv2.DIST_L2, 5).astype(np.float32)
-    scale = max(12.0, 0.18 * min(h, w))
-    bw = np.exp(-((dist / scale) ** 2)).astype(np.float32)
-    return _soft_clip01(bw)
+def _boundary_weights(fg: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    h, w = fg.shape[:2]
+    dist = cv2.distanceTransform(fg.astype(np.uint8), cv2.DIST_L2, 5).astype(np.float32)
+    sharp_scale = max(3.0, 0.045 * min(h, w))
+    soft_scale = max(10.0, 0.20 * min(h, w))
+    sharp = np.exp(-((dist / sharp_scale) ** 2)).astype(np.float32)
+    soft = np.exp(-((dist / soft_scale) ** 2)).astype(np.float32)
+    return _soft_clip01(sharp), _soft_clip01(soft)
 
 
 def build_motion_masks(rgb: np.ndarray) -> Dict[str, np.ndarray]:
     h, w = rgb.shape[:2]
     ew = _edge_weight(rgb)
-    bw = _boundary_weight(rgb)
+    fg = _foreground_mask(rgb)
+    bw_sharp, bw_soft = _boundary_weights(fg)
     face = _face_mask(rgb)
 
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     xn = (xx / max(1.0, w - 1.0)) * 2.0 - 1.0
     yn = (yy / max(1.0, h - 1.0)) * 2.0 - 1.0
-
-    # Hair prior: upper-middle ellipse, with edges.
-    hair_prior = np.exp(-((xn / 0.55) ** 2 + ((yn + 0.55) / 0.35) ** 2)).astype(np.float32)
-    hair = _soft_clip01(hair_prior * (0.35 + 0.95 * ew) * bw)
-    hair = cv2.GaussianBlur(hair, (0, 0), sigmaX=6.0, sigmaY=6.0)
-
-    # Sleeves prior: mid-lower left/right bands, with edges.
-    left_band = np.exp(-(((xn + 0.65) / 0.28) ** 2 + ((yn - 0.10) / 0.55) ** 2)).astype(np.float32)
-    right_band = np.exp(-(((xn - 0.65) / 0.28) ** 2 + ((yn - 0.10) / 0.55) ** 2)).astype(np.float32)
-    sleeves_prior = np.maximum(left_band, right_band)
-    sleeves = _soft_clip01(sleeves_prior * (0.25 + 1.05 * ew) * bw)
-    sleeves = cv2.GaussianBlur(sleeves, (0, 0), sigmaX=7.0, sigmaY=7.0)
-
-    # Cloth edge: lower/middle area with edges; helps capes/robes.
-    cloth_prior = np.exp(-((xn / 0.95) ** 2 + ((yn - 0.15) / 0.75) ** 2)).astype(np.float32)
-    cloth_edge = _soft_clip01(cloth_prior * ew * bw)
-    cloth_edge = cv2.GaussianBlur(cloth_edge, (0, 0), sigmaX=8.0, sigmaY=8.0)
+    fg_f = fg.astype(np.float32)
 
     if face.any():
-        mask_keep = (~face).astype(np.float32)
+        face_dist = cv2.distanceTransform((~face).astype(np.uint8), cv2.DIST_L2, 5).astype(np.float32)
+        d0 = 0.05 * min(h, w)
+        d1 = max(8.0, 0.16 * min(h, w))
+        face_far = _soft_clip01((face_dist - d0) / d1)
+        face_block = cv2.dilate(face.astype(np.uint8), np.ones((11, 11), np.uint8), iterations=1) > 0
+    else:
+        face_far = np.ones((h, w), dtype=np.float32)
+        face_block = np.zeros((h, w), dtype=bool)
+
+    # Hair should mostly move on outer contour and tips, not near face/root.
+    crown = np.exp(-((xn / 0.62) ** 2 + ((yn + 0.58) / 0.42) ** 2)).astype(np.float32)
+    long_hair = np.exp(-((xn / 0.52) ** 2 + ((yn + 0.03) / 0.95) ** 2)).astype(np.float32)
+    hair_prior = np.maximum(crown, 0.75 * long_hair)
+    hair = _soft_clip01(hair_prior * (0.30 + 1.10 * ew) * bw_sharp * face_far * fg_f)
+    hair = cv2.GaussianBlur(hair, (0, 0), sigmaX=6.0, sigmaY=6.0)
+
+    # Sleeves/arms: split left/right so each side can sway coherently.
+    left_band = np.exp(-(((xn + 0.62) / 0.34) ** 2 + ((yn - 0.18) / 0.72) ** 2)).astype(np.float32)
+    right_band = np.exp(-(((xn - 0.62) / 0.34) ** 2 + ((yn - 0.18) / 0.72) ** 2)).astype(np.float32)
+    sleeve_mix = (0.45 * bw_sharp + 0.55 * bw_soft) * fg_f
+    sleeve_left = _soft_clip01(left_band * (0.30 + 1.25 * ew) * sleeve_mix)
+    sleeve_right = _soft_clip01(right_band * (0.30 + 1.25 * ew) * sleeve_mix)
+    sleeve_left = cv2.GaussianBlur(sleeve_left, (0, 0), sigmaX=7.0, sigmaY=7.0)
+    sleeve_right = cv2.GaussianBlur(sleeve_right, (0, 0), sigmaX=7.0, sigmaY=7.0)
+
+    # Cloth flow: emphasize lower cloth area, not just tiny contour fragments.
+    cloth_prior = np.exp(-((xn / 1.05) ** 2 + ((yn - 0.34) / 0.95) ** 2)).astype(np.float32)
+    cloth_edge = _soft_clip01(cloth_prior * (0.24 + 1.05 * ew) * (0.30 + 0.70 * bw_soft) * fg_f)
+    cloth_edge = cv2.GaussianBlur(cloth_edge, (0, 0), sigmaX=8.0, sigmaY=8.0)
+
+    if face_block.any():
+        mask_keep = (~face_block).astype(np.float32)
         hair *= mask_keep
-        sleeves *= mask_keep
+        sleeve_left *= mask_keep
+        sleeve_right *= mask_keep
         cloth_edge *= mask_keep
 
-    return {"hair": hair, "sleeves": sleeves, "cloth_edge": cloth_edge}
+    return {
+        "hair": hair,
+        "sleeve_left": sleeve_left,
+        "sleeve_right": sleeve_right,
+        "cloth_edge": cloth_edge,
+    }

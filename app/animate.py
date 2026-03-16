@@ -137,10 +137,14 @@ def generate_loop_frames_iter(
     yn = grid_y / max(1.0, float(h - 1))
     cx = np.abs(xn)
 
-    hair_alpha = cv2.GaussianBlur((hair * _soft_ramp(yn, 0.18, 0.88) * (0.25 + 0.75 * _soft_ramp(cx, 0.10, 0.48))).astype(np.float32), (0, 0), sigmaX=4.0, sigmaY=4.0)
-    sleeve_left_alpha = cv2.GaussianBlur((sleeve_left * _soft_ramp(yn, 0.24, 0.96)).astype(np.float32), (0, 0), sigmaX=5.0, sigmaY=5.0)
-    sleeve_right_alpha = cv2.GaussianBlur((sleeve_right * _soft_ramp(yn, 0.24, 0.96)).astype(np.float32), (0, 0), sigmaX=5.0, sigmaY=5.0)
-    cloth_alpha = cv2.GaussianBlur((cloth * _soft_ramp(yn, 0.40, 0.98)).astype(np.float32), (0, 0), sigmaX=6.0, sigmaY=6.0)
+    hair_alpha = cv2.GaussianBlur((hair * _soft_ramp(yn, 0.16, 0.90) * (0.35 + 0.85 * _soft_ramp(cx, 0.08, 0.50))).astype(np.float32), (0, 0), sigmaX=2.2, sigmaY=2.2)
+    sleeve_left_alpha = cv2.GaussianBlur((sleeve_left * _soft_ramp(yn, 0.20, 0.98)).astype(np.float32), (0, 0), sigmaX=2.8, sigmaY=2.8)
+    sleeve_right_alpha = cv2.GaussianBlur((sleeve_right * _soft_ramp(yn, 0.20, 0.98)).astype(np.float32), (0, 0), sigmaX=2.8, sigmaY=2.8)
+    cloth_alpha = cv2.GaussianBlur((cloth * _soft_ramp(yn, 0.34, 1.00)).astype(np.float32), (0, 0), sigmaX=3.2, sigmaY=3.2)
+    hair_alpha = np.clip(hair_alpha * 2.05, 0.0, 1.0).astype(np.float32)
+    sleeve_left_alpha = np.clip(sleeve_left_alpha * 1.95, 0.0, 1.0).astype(np.float32)
+    sleeve_right_alpha = np.clip(sleeve_right_alpha * 1.95, 0.0, 1.0).astype(np.float32)
+    cloth_alpha = np.clip(cloth_alpha * 1.85, 0.0, 1.0).astype(np.float32)
 
     hair_anchor = _component_anchor(hair_alpha, mode="top")
     sleeve_left_anchor = _component_anchor(sleeve_left_alpha, mode="upper")
@@ -156,9 +160,10 @@ def generate_loop_frames_iter(
         motion_frames = 12
 
     particle_field = ParticleField.from_image(rgb, count=max(0, int(particles)), seed=2026)
+    cycle_rate = 1.35
 
     for t in range(motion_frames):
-        phase = 2.0 * math.pi * (t / motion_frames)
+        phase = 2.0 * math.pi * cycle_rate * (t / motion_frames)
         s1 = math.sin(phase)
         c1 = math.cos(phase)
         warped = bgr.copy()
@@ -167,9 +172,9 @@ def generate_loop_frames_iter(
             hair_layer, hair_layer_alpha = _transform_bgra(
                 bgr,
                 hair_alpha,
-                angle_deg=3.6 * strength * s1,
-                tx=10.0 * strength * s1,
-                ty=2.0 * strength * c1,
+                angle_deg=1.9 * strength * s1,
+                tx=5.0 * strength * s1,
+                ty=1.0 * strength * c1,
                 center=hair_anchor,
             )
             warped = _composite(warped, hair_layer, hair_layer_alpha)
@@ -178,9 +183,9 @@ def generate_loop_frames_iter(
             left_layer, left_alpha = _transform_bgra(
                 bgr,
                 sleeve_left_alpha,
-                angle_deg=-5.0 * strength * s1,
-                tx=-8.0 * strength * s1,
-                ty=6.0 * strength * c1,
+                angle_deg=-2.7 * strength * s1,
+                tx=-4.2 * strength * s1,
+                ty=3.2 * strength * c1,
                 center=sleeve_left_anchor,
             )
             warped = _composite(warped, left_layer, left_alpha)
@@ -189,9 +194,9 @@ def generate_loop_frames_iter(
             right_layer, right_alpha = _transform_bgra(
                 bgr,
                 sleeve_right_alpha,
-                angle_deg=5.0 * strength * s1,
-                tx=8.0 * strength * s1,
-                ty=6.0 * strength * c1,
+                angle_deg=2.7 * strength * s1,
+                tx=4.2 * strength * s1,
+                ty=3.2 * strength * c1,
                 center=sleeve_right_anchor,
             )
             warped = _composite(warped, right_layer, right_alpha)
@@ -200,9 +205,9 @@ def generate_loop_frames_iter(
             cloth_layer, cloth_layer_alpha = _transform_bgra(
                 bgr,
                 cloth_alpha,
-                angle_deg=1.5 * strength * c1,
-                tx=4.0 * strength * s1,
-                ty=10.0 * strength * s1,
+                angle_deg=0.85 * strength * c1,
+                tx=2.1 * strength * s1,
+                ty=5.0 * strength * s1,
                 center=cloth_anchor,
             )
             warped = _composite(warped, cloth_layer, cloth_layer_alpha)

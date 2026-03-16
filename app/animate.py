@@ -39,12 +39,19 @@ def _component_anchor(mask: np.ndarray, *, mode: str) -> Tuple[float, float] | N
         return None
     ys = pts[:, 0].astype(np.float32)
     xs = pts[:, 1].astype(np.float32)
-    x_mid = float(xs.mean())
     if mode == "top":
-        y_anchor = float(np.percentile(ys, 12))
+        upper_cut = float(np.percentile(ys, 32))
+        upper = ys <= upper_cut
+        if upper.any():
+            xs = xs[upper]
+            ys = ys[upper]
+        x_mid = float(np.median(xs))
+        y_anchor = float(np.percentile(ys, 8))
     elif mode == "upper":
+        x_mid = float(xs.mean())
         y_anchor = float(np.percentile(ys, 22))
     else:
+        x_mid = float(xs.mean())
         y_anchor = float(np.percentile(ys, 35))
     return x_mid, y_anchor
 
@@ -140,18 +147,20 @@ def generate_loop_frames_iter(
     hair_mask = (hair > 0.03).astype(np.uint8)
     hair_dist = cv2.distanceTransform(hair_mask, cv2.DIST_L2, 5).astype(np.float32)
     hair_edge = np.exp(-((hair_dist / 18.0) ** 2)).astype(np.float32)
+    hair_top_band = np.exp(-(((yn - 0.24) / 0.22) ** 2)).astype(np.float32)
+    hair_side_band = (_soft_ramp(cx, 0.16, 0.48) * _soft_ramp(yn, 0.18, 0.86)).astype(np.float32)
+    hair_outline_focus = np.maximum(hair_top_band, 0.92 * hair_side_band).astype(np.float32)
     hair_alpha = cv2.GaussianBlur(
         (
             hair
             * hair_edge
-            * _soft_ramp(yn, 0.10, 0.95)
-            * (0.45 + 0.95 * _soft_ramp(cx, 0.06, 0.55))
+            * hair_outline_focus
         ).astype(np.float32),
         (0, 0),
-        sigmaX=2.0,
-        sigmaY=2.0,
+        sigmaX=1.6,
+        sigmaY=1.6,
     )
-    hair_alpha = np.clip(hair_alpha * 3.4, 0.0, 1.0).astype(np.float32)
+    hair_alpha = np.clip(hair_alpha * 4.2, 0.0, 1.0).astype(np.float32)
 
     # Pause sleeve / cloth animation for now. Detection is too unstable on the current art style.
     sleeve_left_alpha = np.zeros_like(hair_alpha)
@@ -172,7 +181,7 @@ def generate_loop_frames_iter(
         motion_frames = 12
 
     particle_field = ParticleField.from_image(rgb, count=max(0, int(particles)), seed=2026)
-    cycle_rate = 1.35
+    cycle_rate = 1.65
 
     for t in range(motion_frames):
         phase = 2.0 * math.pi * cycle_rate * (t / motion_frames)
@@ -184,9 +193,9 @@ def generate_loop_frames_iter(
             hair_layer, hair_layer_alpha = _transform_bgra(
                 bgr,
                 hair_alpha,
-                angle_deg=3.1 * strength * s1,
-                tx=8.5 * strength * s1,
-                ty=1.4 * strength * c1,
+                angle_deg=0.64 * strength * s1,
+                tx=1.67 * strength * s1,
+                ty=0.27 * strength * c1,
                 center=hair_anchor,
             )
             warped = _composite(warped, hair_layer, hair_layer_alpha)

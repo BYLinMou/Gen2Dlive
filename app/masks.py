@@ -5,6 +5,8 @@ from typing import Dict
 import cv2
 import numpy as np
 
+from app.config import get_segmentation_backend
+
 
 def _soft_clip01(x: np.ndarray) -> np.ndarray:
     return np.clip(x, 0.0, 1.0).astype(np.float32)
@@ -70,8 +72,36 @@ def _grabcut_foreground(rgb: np.ndarray) -> np.ndarray | None:
     return fg
 
 
+def _rembg_foreground(rgb: np.ndarray) -> np.ndarray | None:
+    if get_segmentation_backend() != "rembg":
+        return None
+    try:
+        from rembg import remove
+    except Exception:
+        return None
+    try:
+        mask = remove(rgb, only_mask=True, post_process_mask=True)
+    except Exception:
+        return None
+    if mask is None:
+        return None
+    if mask.ndim == 3:
+        mask = mask[..., 0]
+    fg = mask.astype(np.float32) / 255.0
+    fg = cv2.GaussianBlur(fg, (0, 0), sigmaX=1.4, sigmaY=1.4)
+    fg = fg > 0.45
+    ratio = float(fg.mean())
+    if ratio < 0.05 or ratio > 0.95:
+        return None
+    fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
+    fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8)) > 0
+    return fg
+
+
 def _foreground_mask(rgb: np.ndarray) -> np.ndarray:
-    fg = _grabcut_foreground(rgb)
+    fg = _rembg_foreground(rgb)
+    if fg is None:
+        fg = _grabcut_foreground(rgb)
     if fg is None:
         fg = ~_background_mask(rgb)
     fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0

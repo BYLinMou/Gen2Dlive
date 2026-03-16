@@ -114,3 +114,17 @@ def get_motion_fps() -> int:
     except ValueError:
         return 10
     return max(1, min(60, value))
+
+
+@lru_cache(maxsize=1)
+def get_segmentation_backend() -> str:
+    raw = os.getenv("GEN2DLIVE_SEGMENTATION_BACKEND")
+    if raw is None:
+        local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_SEGMENTATION_BACKEND")
+        raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_SEGMENTATION_BACKEND")
+    if raw is None:
+        return "rembg"
+    value = str(raw).strip().lower()
+    if value in {"rembg", "heuristic"}:
+        return value
+    return "rembg"

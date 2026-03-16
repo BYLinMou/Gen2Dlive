@@ -125,3 +125,17 @@ def get_segmentation_model() -> str:
     if value in {"isnet-anime", "u2net_human_seg", "u2net"}:
         return value
     return "isnet-anime"
+
+
+@lru_cache(maxsize=1)
+def get_job_workers() -> int:
+    raw = _read_setting("GEN2DLIVE_JOB_WORKERS")
+    if raw is None:
+        cpu_count = os.cpu_count() or 1
+        return max(1, min(4, cpu_count))
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        cpu_count = os.cpu_count() or 1
+        return max(1, min(4, cpu_count))
+    return max(1, min(16, value))

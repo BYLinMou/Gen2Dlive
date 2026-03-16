@@ -4,7 +4,7 @@ import base64
 import binascii
 import shutil
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -16,6 +16,7 @@ from app.config import (
     get_default_particles,
     get_default_strength,
 )
+from app.jobs import JobRecord, job_manager
 from app.service import generate_loop_mp4_from_bytes_to_tempfile, generate_loop_mp4_to_tempfile
 
 router = APIRouter()
@@ -34,6 +35,22 @@ class AnimateJsonRequest(BaseModel):
     particles: int = get_default_particles()
 
 
+class JobResponse(BaseModel):
+    job_id: str
+    status: str
+    created_at: str
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
+    result_url: str | None = None
+
+
 def _decode_base64_image(text: str) -> bytes:
     src = text.strip()
     lower_src = src.lower()
@@ -44,6 +61,21 @@ def _decode_base64_image(text: str) -> bytes:
         return base64.b64decode(src, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Invalid base64 image payload") from exc
+
+
+def _make_job_status_response(request: Request, record: JobRecord) -> JobStatusResponse:
+    result_url = None
+    if record.status == "succeeded" and record.out_path:
+        result_url = str(request.url_for("get_job_result", job_id=record.job_id))
+    return JobStatusResponse(
+        job_id=record.job_id,
+        status=record.status,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        error=record.error,
+        result_url=result_url,
+    )
 
 
 @router.get("/healthz")
@@ -121,5 +153,98 @@ def animate_json(
         out_path,
         media_type="video/mp4",
         filename="loop.mp4",
+        background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True),
+    )
+
+
+@router.post("/jobs/animate", response_model=JobResponse, status_code=202)
+def create_animate_job(
+    request: Request,
+    _: None = Depends(require_auth_if_configured),
+    image: UploadFile | None = File(default=None),
+    image_base64: str | None = Form(default=None),
+    duration_sec: float = Form(get_default_duration_sec()),
+    fps: int = Form(get_default_fps()),
+    width: int | None = Form(default=None),
+    height: int | None = Form(default=None),
+    size: int | None = Form(default=None),
+    strength: float = Form(get_default_strength()),
+    particles: int = Form(get_default_particles()),
+) -> JobResponse:
+    del request
+    if image is None and not image_base64:
+        raise HTTPException(status_code=400, detail="Provide either image file or image_base64")
+    if image is not None and image_base64:
+        raise HTTPException(status_code=400, detail="Use only one input: image or image_base64")
+
+    if image is not None:
+        image_bytes = image.file.read()
+    else:
+        image_bytes = _decode_base64_image(image_base64 or "")
+
+    record = job_manager.create_job(
+        image_bytes=image_bytes,
+        duration_sec=duration_sec,
+        fps=fps,
+        width=width,
+        height=height,
+        size=size,
+        strength=strength,
+        particles=particles,
+    )
+    return JobResponse(job_id=record.job_id, status=record.status, created_at=record.created_at)
+
+
+@router.post("/jobs/animate-json", response_model=JobResponse, status_code=202)
+def create_animate_json_job(
+    payload: AnimateJsonRequest,
+    _: None = Depends(require_auth_if_configured),
+) -> JobResponse:
+    image_bytes = _decode_base64_image(payload.image_base64)
+    record = job_manager.create_job(
+        image_bytes=image_bytes,
+        duration_sec=payload.duration_sec,
+        fps=payload.fps,
+        width=payload.width,
+        height=payload.height,
+        size=payload.size,
+        strength=payload.strength,
+        particles=payload.particles,
+    )
+    return JobResponse(job_id=record.job_id, status=record.status, created_at=record.created_at)
+
+
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job(
+    request: Request,
+    job_id: str,
+    _: None = Depends(require_auth_if_configured),
+) -> JobStatusResponse:
+    record = job_manager.get_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _make_job_status_response(request, record)
+
+
+@router.get("/jobs/{job_id}/result", name="get_job_result")
+def get_job_result(
+    job_id: str,
+    _: None = Depends(require_auth_if_configured),
+) -> FileResponse:
+    record = job_manager.get_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if record.status == "queued" or record.status == "running":
+        raise HTTPException(status_code=409, detail="Job is not finished yet")
+    if record.status == "failed":
+        raise HTTPException(status_code=409, detail=record.error or "Job failed")
+    result = job_manager.consume_result(job_id)
+    if result is None:
+        raise HTTPException(status_code=410, detail="Job result is no longer available")
+    out_path, tmp_dir = result
+    return FileResponse(
+        out_path,
+        media_type="video/mp4",
+        filename=f"{job_id}.mp4",
         background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True),
     )

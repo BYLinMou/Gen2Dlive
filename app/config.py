@@ -93,11 +93,11 @@ def get_default_strength() -> float:
         local_val = _read_env_value(PROJECT_ROOT / ".env.local", "GEN2DLIVE_DEFAULT_STRENGTH")
         raw = local_val if local_val is not None else _read_env_value(PROJECT_ROOT / ".env", "GEN2DLIVE_DEFAULT_STRENGTH")
     if raw is None:
-        return 1.0
+        return 2.0
     try:
         value = float(str(raw).strip())
     except ValueError:
-        return 1.0
+        return 2.0
     return float(max(0.0, min(3.0, value)))
 
 

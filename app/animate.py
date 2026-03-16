@@ -82,7 +82,7 @@ def generate_loop_frames_iter(
     cloth = masks["cloth_edge"]
     motion_mask = np.clip(0.9 * hair + 0.8 * sleeves + 0.6 * cloth, 0.0, 1.0).astype(np.float32)
     motion_mask = cv2.GaussianBlur(motion_mask, (0, 0), sigmaX=7.0, sigmaY=7.0)
-    motion_mask = np.power(motion_mask, 1.08).astype(np.float32)
+    motion_mask = np.power(motion_mask, 0.95).astype(np.float32)
 
     motion_bin = (motion_mask > 0.04).astype(np.uint8)
     if motion_bin.any():
@@ -114,9 +114,9 @@ def generate_loop_frames_iter(
         s1 = math.sin(phase)
         c1 = math.cos(phase)
 
-        amp_px = 2.2 * strength
-        dx = (0.70 * s1 * base_dx + 0.35 * c1 * base_dy) * amp_px
-        dy = (0.50 * c1 * base_dy + 0.25 * s1 * base_dx) * (amp_px * 0.85)
+        amp_px = 5.8 * strength
+        dx = (0.95 * s1 * base_dx + 0.55 * c1 * base_dy) * amp_px
+        dy = (0.70 * c1 * base_dy + 0.35 * s1 * base_dx) * (amp_px * 0.90)
 
         dx *= motion_mask
         dy *= motion_mask
